@@ -56,38 +56,49 @@ local function BuildMountSpellCache()
 	Debug("no known mount-enumeration API found on C_MountJournal - run /mpldebug to list what's there")
 end
 
--- Setting an edit box's text via script doesn't fire its OnTextChanged, so
--- the journal's own filtering has to be kicked manually. Right after the
--- journal's first-ever open this frame may not exist yet for a tick
--- (Blizzard_Collections finishing its own setup), so retry briefly.
-local function TrySetSearchBox(frameName, text, attemptsLeft)
+-- Mirrors the search text into the journal's visible edit box (cosmetic
+-- only - the actual filtering below goes through C_MountJournal.SetSearch /
+-- C_PetJournal.SetSearchFilter directly). Right after the journal's
+-- first-ever open the box may not exist yet for a tick (Blizzard_Collections
+-- finishing its own setup), so retry briefly; if the frame name's wrong on
+-- this client it just never updates, which isn't fatal since filtering
+-- already happened.
+local function TryMirrorSearchBoxText(frameName, text, attemptsLeft)
 	local box = _G[frameName]
 	if box then
 		box:SetText(text or "")
-		local onTextChanged = box:GetScript("OnTextChanged")
-		if onTextChanged then
-			onTextChanged(box, true)
-		end
-		Debug("set %s to %q", frameName, tostring(text))
+		Debug("mirrored %q into %s", tostring(text), frameName)
 		return
 	end
 	if (attemptsLeft or 0) > 0 then
-		C_Timer.After(0.1, function() TrySetSearchBox(frameName, text, attemptsLeft - 1) end)
+		C_Timer.After(0.1, function() TryMirrorSearchBoxText(frameName, text, attemptsLeft - 1) end)
 	else
-		Debug("could not find %s", frameName)
+		Debug("could not find %s to mirror text into (non-fatal)", frameName)
 	end
 end
 
 local function OpenMountJournalFor(mountID)
-	local ok, name = pcall(C_MountJournal.GetMountInfoByID, mountID)
 	ToggleCollectionsJournal(1)
-	TrySetSearchBox("MountJournalSearchBox", ok and name or "", 5)
+	local ok, name = pcall(C_MountJournal.GetMountInfoByID, mountID)
+	if ok and name then
+		if type(C_MountJournal.SetSearch) == "function" then
+			C_MountJournal.SetSearch(name)
+			Debug("C_MountJournal.SetSearch(%q)", name)
+		end
+		TryMirrorSearchBoxText("MountJournalSearchBox", name, 5)
+	end
 end
 
 local function OpenPetJournalFor(speciesID)
-	local ok, name = pcall(C_PetJournal.GetPetInfoBySpeciesID, speciesID)
 	ToggleCollectionsJournal(2)
-	TrySetSearchBox("PetJournalSearchBox", ok and name or "", 5)
+	local ok, name = pcall(C_PetJournal.GetPetInfoBySpeciesID, speciesID)
+	if ok and name then
+		if type(C_PetJournal.SetSearchFilter) == "function" then
+			C_PetJournal.SetSearchFilter(name)
+			Debug("C_PetJournal.SetSearchFilter(%q)", name)
+		end
+		TryMirrorSearchBoxText("PetJournalSearchBox", name, 5)
+	end
 end
 
 hooksecurefunc("HandleModifiedItemClick", function(link)
