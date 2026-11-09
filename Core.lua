@@ -18,14 +18,20 @@ local function GetLinkPayload(link)
 	return link and link:match("|H(.-)|h")
 end
 
--- By default, opening the Collections Journal closes every other open UI
--- panel (trade window included) because UIPanelWindows["CollectionsJournal"]
--- has allowOtherPanels = false - that's Blizzard's own panel-management
--- flag, not something specific to this addon's hook. Flip it once at load
--- so a Ctrl+click mid-trade doesn't close the trade window out from under
--- the player.
-if UIPanelWindows and UIPanelWindows["CollectionsJournal"] then
-	UIPanelWindows["CollectionsJournal"].allowOtherPanels = true
+-- Setting allowOtherPanels=true on CollectionsJournal (the panel being
+-- opened) didn't stop MerchantFrame from closing - a live stack trace
+-- showed it's UIParent.lua's SetUIPanel doing the closing, not the older
+-- area-conflict check that flag was meant for. So the flag's actual
+-- meaning here looks inverted from what the name suggests: it has to be
+-- set on the panel that should SURVIVE other panels opening, not on the
+-- one being opened. Setting it on MerchantFrame/TradeFrame themselves
+-- instead, as a test.
+if UIPanelWindows then
+	for _, name in ipairs({ "CollectionsJournal", "MerchantFrame", "TradeFrame" }) do
+		if UIPanelWindows[name] then
+			UIPanelWindows[name].allowOtherPanels = true
+		end
+	end
 end
 
 -- allowOtherPanels alone isn't closing the vendor window in practice (the
