@@ -380,6 +380,8 @@ end
 
 hooksecurefunc("HandleModifiedItemClick", function(link)
 	Debug("HandleModifiedItemClick link=%s", tostring(link))
+	Debug("TradeFrame IsShown=%s IsVisible=%s (checked BEFORE this addon does anything else)",
+		tostring(TradeFrame and TradeFrame:IsShown()), tostring(TradeFrame and TradeFrame:IsVisible()))
 	if not IsModifiedClick("DRESSUP") then
 		Debug("not a Dressup-modified click, ignoring")
 		return
