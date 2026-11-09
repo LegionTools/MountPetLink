@@ -28,10 +28,14 @@ if UIPanelWindows and UIPanelWindows["CollectionsJournal"] then
 	UIPanelWindows["CollectionsJournal"].allowOtherPanels = true
 end
 
--- allowOtherPanels alone isn't closing the trade window in practice, so
--- something else is calling CloseTrade() or hiding TradeFrame directly.
--- These hooks print exactly who does it (with a stack trace) the next time
--- it happens, instead of guessing again - temporary, DEBUG-gated.
+-- allowOtherPanels alone isn't closing the trade window in practice. The
+-- first round of diagnostics (hooking the global CloseTrade/HideUIPanel
+-- functions) found neither was being called - so whatever hides TradeFrame
+-- does it some other way (a direct :Hide() call, an animation, or a
+-- TRADE_CLOSED event from the server itself). Hooking TradeFrame's own
+-- OnHide script catches it regardless of mechanism; registering TRADE_CLOSED
+-- separately tells us whether the server is the one ending the trade in the
+-- first place, rather than the client UI closing it on its own.
 do
 	local ok1 = pcall(hooksecurefunc, "CloseTrade", function()
 		Debug("CloseTrade() called:\n%s", debugstack(2))
@@ -44,6 +48,25 @@ do
 		end
 	end)
 	if not ok2 then Debug("could not hook HideUIPanel") end
+
+	if TradeFrame then
+		local ok3 = pcall(TradeFrame.HookScript, TradeFrame, "OnHide", function()
+			Debug("TradeFrame OnHide fired:\n%s", debugstack(2))
+		end)
+		if not ok3 then Debug("could not hook TradeFrame OnHide") end
+	else
+		Debug("global TradeFrame doesn't exist at load time")
+	end
+
+	local tradeCloseWatcher = CreateFrame("Frame")
+	local registered = pcall(tradeCloseWatcher.RegisterEvent, tradeCloseWatcher, "TRADE_CLOSED")
+	if registered then
+		tradeCloseWatcher:SetScript("OnEvent", function()
+			Debug("TRADE_CLOSED event fired (server ended the trade)")
+		end)
+	else
+		Debug("could not register TRADE_CLOSED")
+	end
 end
 
 -- This server's GetItemSpell doesn't return a usable spellID for
