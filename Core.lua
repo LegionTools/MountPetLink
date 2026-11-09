@@ -21,17 +21,71 @@ end
 -- This server's GetItemSpell doesn't return a usable spellID for
 -- mount-teaching items (confirmed via /mpltest - it comes back as "", not a
 -- real number, even for a mount already in the collection), so matching by
--- spell isn't viable here. Instead, cache icon texture -> mountID list: a
--- mount item's icon is normally the same texture as the mount's own icon in
--- the Journal, which is a language-independent match (unlike matching by
--- name, which breaks on Russian noun declension between the item name and
--- the mount's own name). Several mounts (recolors/variants) can share one
--- icon, so this maps to a LIST of candidates, not a single mountID.
+-- spell isn't viable here. Icon matching (item icon == mount's Journal icon)
+-- works most of the time, but isn't exact either - confirmed live, a mount
+-- item's icon can differ by a texture ID from its own mount's icon even for
+-- visually-identical recolors (e.g. the Traveler's Tundra Mammoth item vs
+-- mount). So candidates come from THREE signals unioned together: exact
+-- icon match, exact spell match (kept in case it ever works), and a
+-- name-word-stem match (shares a meaningful word root with the item's name,
+-- case-folded and stripped of grammatical endings) - the last one is lossy
+-- on purpose, to widen the net rather than silently miss the right mount;
+-- the picker lets the player sort out the real one from the shortlist.
+
+-- Lua's string.lower only folds ASCII - this does the same for the basic
+-- Cyrillic block (А-Я, Ё) so word-stem comparisons aren't case-sensitive.
+local function CyrillicToLower(text)
+	text = text:gsub("\208([\144-\159])", function(b) return "\208" .. string.char(b:byte() + 32) end)
+	text = text:gsub("\208([\160-\175])", function(b) return "\209" .. string.char(b:byte() - 32) end)
+	text = text:gsub("\208\129", "\209\145") -- Ё -> ё
+	return text
+end
+
+-- Russian adjectives/nouns decline (e.g. item "тундрового мамонта" vs mount
+-- "Тундровый мамонт"), so comparing whole words fails; this takes each
+-- word's first few characters as a rough stem instead. Cyrillic characters
+-- are 2 bytes each in UTF-8, hence the *2 on the byte count.
+local STEM_CHARS = 5
+local MIN_WORD_CHARS = 5 -- skip short connector words ("для", "и", ...)
+
+local function GetWordStems(text)
+	local stems = {}
+	if not text then return stems end
+	text = CyrillicToLower(text:lower())
+	for word in text:gmatch("%S+") do
+		word = word:gsub("^%p+", ""):gsub("%p+$", "")
+		if #word >= MIN_WORD_CHARS * 2 then
+			stems[word:sub(1, STEM_CHARS * 2)] = true
+		end
+	end
+	return stems
+end
+
 local iconToMountIDs
 local spellIDToMountID -- kept as a fallback in case this ever works after all
+local stemToMountIDs
+
+local function AddToIndex(index, key, mountID)
+	if not key then return end
+	index[key] = index[key] or {}
+	tinsert(index[key], mountID)
+end
+
+local function IndexMount(mountID, name, spellID, icon)
+	if icon then
+		AddToIndex(iconToMountIDs, icon, mountID)
+	end
+	spellID = tonumber(spellID)
+	if spellID and spellID ~= 0 then
+		spellIDToMountID[spellID] = mountID
+	end
+	for stem in pairs(GetWordStems(name)) do
+		AddToIndex(stemToMountIDs, stem, mountID)
+	end
+end
 
 local function BuildMountCaches()
-	iconToMountIDs, spellIDToMountID = {}, {}
+	iconToMountIDs, spellIDToMountID, stemToMountIDs = {}, {}, {}
 	local CMJ = C_MountJournal
 	local mountIDs
 
@@ -43,29 +97,17 @@ local function BuildMountCaches()
 	if mountIDs then
 		Debug("building mount caches via GetMountIDs (%d mounts)", #mountIDs)
 		for _, mountID in ipairs(mountIDs) do
-			local ok, _, spellID, icon = pcall(CMJ.GetMountInfoByID, mountID)
+			local ok, name, spellID, icon = pcall(CMJ.GetMountInfoByID, mountID)
 			if ok then
-				if icon then
-					iconToMountIDs[icon] = iconToMountIDs[icon] or {}
-					tinsert(iconToMountIDs[icon], mountID)
-				end
-				if spellID and tonumber(spellID) and tonumber(spellID) ~= 0 then
-					spellIDToMountID[tonumber(spellID)] = mountID
-				end
+				IndexMount(mountID, name, spellID, icon)
 			end
 		end
 	elseif type(CMJ.GetMountInfo) == "function" and type(CMJ.GetNumMounts) == "function" then
 		Debug("building mount caches via GetNumMounts/GetMountInfo")
 		for i = 1, CMJ.GetNumMounts() do
-			local ok, _, spellID, icon, _, _, _, _, _, _, _, mountID = pcall(CMJ.GetMountInfo, i)
+			local ok, name, spellID, icon, _, _, _, _, _, _, _, mountID = pcall(CMJ.GetMountInfo, i)
 			if ok and mountID then
-				if icon then
-					iconToMountIDs[icon] = iconToMountIDs[icon] or {}
-					tinsert(iconToMountIDs[icon], mountID)
-				end
-				if spellID and tonumber(spellID) and tonumber(spellID) ~= 0 then
-					spellIDToMountID[tonumber(spellID)] = mountID
-				end
+				IndexMount(mountID, name, spellID, icon)
 			end
 		end
 	else
@@ -251,25 +293,41 @@ hooksecurefunc("HandleModifiedItemClick", function(link)
 				BuildMountCaches()
 			end
 
-			local itemIcon = select(10, GetItemInfo(itemID))
-			local candidates = itemIcon and iconToMountIDs[itemIcon]
-			Debug("itemIcon=%s -> %d candidate(s)", tostring(itemIcon), candidates and #candidates or 0)
+			local itemName, _, _, _, _, _, _, _, _, itemIcon = GetItemInfo(itemID)
 
-			if candidates and #candidates == 1 then
-				OpenMountJournalFor(candidates[1])
-			elseif candidates and #candidates > 1 then
-				ShowMountPicker(candidates)
-			else
-				-- fall back to the spell-based match in case the icon one
-				-- missed (e.g. a custom item icon that doesn't match its mount)
-				local _, spellID = GetItemSpell(itemID)
-				if spellID == "" then spellID = nil end -- this server returns "" rather than nil for no-spell items
-				spellID = tonumber(spellID)
-				local mountID = spellID and spellIDToMountID[spellID]
-				Debug("fallback GetItemSpell -> spellID=%s -> mountID=%s", tostring(spellID), tostring(mountID))
-				if mountID then
-					OpenMountJournalFor(mountID)
+			local seen, candidates = {}, {}
+			local function AddCandidate(mountID)
+				if mountID and not seen[mountID] then
+					seen[mountID] = true
+					tinsert(candidates, mountID)
 				end
+			end
+
+			if itemIcon and iconToMountIDs[itemIcon] then
+				for _, mountID in ipairs(iconToMountIDs[itemIcon]) do AddCandidate(mountID) end
+			end
+
+			local _, spellID = GetItemSpell(itemID)
+			if spellID == "" then spellID = nil end -- this server returns "" rather than nil for no-spell items
+			spellID = tonumber(spellID)
+			if spellID then AddCandidate(spellIDToMountID[spellID]) end
+
+			if itemName then
+				for stem in pairs(GetWordStems(itemName)) do
+					local matches = stemToMountIDs[stem]
+					if matches then
+						for _, mountID in ipairs(matches) do AddCandidate(mountID) end
+					end
+				end
+			end
+
+			Debug("itemName=%s itemIcon=%s spellID=%s -> %d total candidate(s)",
+				tostring(itemName), tostring(itemIcon), tostring(spellID), #candidates)
+
+			if #candidates == 1 then
+				OpenMountJournalFor(candidates[1])
+			elseif #candidates > 1 then
+				ShowMountPicker(candidates)
 			end
 		end
 	end
@@ -310,9 +368,9 @@ SlashCmdList["MOUNTPETLINKDEBUG"] = function()
 	end
 end
 
--- /mpltest <itemID> - dumps everything both matching strategies (icon and
--- spell) can see for a known itemID, instead of inferring it only from a
--- click that might not even be on a mount item.
+-- /mpltest <itemID> - dumps what each of the three matching signals (icon,
+-- spell, name-stem) sees for a known itemID, instead of inferring it only
+-- from a click that might not even be on a mount item.
 SLASH_MOUNTPETLINKTEST1 = "/mpltest"
 SlashCmdList["MOUNTPETLINKTEST"] = function(msg)
 	local itemID = tonumber(msg)
@@ -327,19 +385,37 @@ SlashCmdList["MOUNTPETLINKTEST"] = function(msg)
 	if spellID == "" then spellID = nil end
 	spellID = tonumber(spellID)
 
-	local candidates = icon and iconToMountIDs[icon]
-	local candidateNames = {}
-	if candidates then
-		for _, mountID in ipairs(candidates) do
-			local ok, mountName = pcall(C_MountJournal.GetMountInfoByID, mountID)
-			tinsert(candidateNames, string.format("%d=%s", mountID, ok and mountName or "?"))
+	local function NamesOf(mountIDs)
+		local out = {}
+		if mountIDs then
+			for _, mountID in ipairs(mountIDs) do
+				local ok, mountName = pcall(C_MountJournal.GetMountInfoByID, mountID)
+				tinsert(out, string.format("%d=%s", mountID, ok and mountName or "?"))
+			end
+		end
+		return table.concat(out, ", ")
+	end
+
+	local iconCandidates = icon and iconToMountIDs[icon]
+	local spellMountID = spellID and spellIDToMountID[spellID]
+
+	local stemCandidates, stems = {}, {}
+	if name then
+		for stem in pairs(GetWordStems(name)) do
+			tinsert(stems, stem)
+			local matches = stemToMountIDs[stem]
+			if matches then
+				for _, mountID in ipairs(matches) do tinsert(stemCandidates, mountID) end
+			end
 		end
 	end
 
 	print(string.format("|cff33ccff[MountPetLink]|r itemID=%d name=%s icon=%s (%s)", itemID, tostring(name), tostring(icon), type(icon)))
-	print(string.format("  icon match: %d candidate(s): %s", candidates and #candidates or 0, table.concat(candidateNames, ", ")))
-	print(string.format("  spell match: GetItemSpell -> spellName=%s spellID=%s | spellIDToMountID[...] = %s",
-		tostring(spellName), tostring(spellID), tostring(spellID and spellIDToMountID[spellID])))
+	print(string.format("  icon match: %d candidate(s): %s", iconCandidates and #iconCandidates or 0, NamesOf(iconCandidates)))
+	print(string.format("  spell match: spellName=%s spellID=%s -> %s",
+		tostring(spellName), tostring(spellID), spellMountID and NamesOf({spellMountID}) or "none"))
+	print(string.format("  name-stem match: stems=%s -> %d candidate(s): %s",
+		table.concat(stems, ","), #stemCandidates, NamesOf(stemCandidates)))
 end
 
 -- /mplfind <substring> - lists every mount whose name contains the given
