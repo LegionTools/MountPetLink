@@ -126,8 +126,12 @@ hooksecurefunc("HandleModifiedItemClick", function(link)
 		Debug("itemID=%s", tostring(itemID))
 		if itemID then
 			local _, spellID = GetItemSpell(itemID)
-			Debug("GetItemSpell(%d) -> spellID=%s", itemID, tostring(spellID))
-			if spellID then
+			Debug("GetItemSpell(%d) -> spellID=%s (%s)", itemID, tostring(spellID), type(spellID))
+			-- this server's GetItemSpell returns "" (truthy!) rather than nil
+			-- for an item with no use-effect, not just nil
+			if spellID == "" then spellID = nil end
+			spellID = tonumber(spellID)
+			if spellID and spellID ~= 0 then
 				if not spellIDToMountID then
 					BuildMountSpellCache()
 				end
@@ -173,5 +177,29 @@ SlashCmdList["MOUNTPETLINKDEBUG"] = function()
 			tostring(CollectionsJournal), tostring(MountJournalSearchBox), tostring(PetJournalSearchBox)))
 		print("C_MountJournal: " .. ListFunctions(C_MountJournal))
 		print("C_PetJournal: " .. ListFunctions(C_PetJournal))
+	end
+end
+
+-- /mpltest <itemID> - dumps GetItemSpell's raw return values for a known
+-- itemID, to check directly whether an item actually has a use-effect
+-- spell (and what this server really returns for one) instead of
+-- inferring it from a click that might not even be on a mount item.
+SLASH_MOUNTPETLINKTEST1 = "/mpltest"
+SlashCmdList["MOUNTPETLINKTEST"] = function(msg)
+	local itemID = tonumber(msg)
+	if not itemID then
+		print("|cff33ccff[MountPetLink]|r usage: /mpltest <itemID>")
+		return
+	end
+	local name = GetItemInfo(itemID)
+	local n = select("#", GetItemSpell(itemID))
+	local spellName, spellID = GetItemSpell(itemID)
+	print(string.format("|cff33ccff[MountPetLink]|r itemID=%d name=%s | GetItemSpell returned %d value(s): spellName=%s (%s) spellID=%s (%s)",
+		itemID, tostring(name), n,
+		tostring(spellName), type(spellName),
+		tostring(spellID), type(spellID)))
+	if spellID and tonumber(spellID) and tonumber(spellID) ~= 0 then
+		if not spellIDToMountID then BuildMountSpellCache() end
+		print(string.format("  spellIDToMountID[%s] = %s", tostring(spellID), tostring(spellIDToMountID[tonumber(spellID)])))
 	end
 end
