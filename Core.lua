@@ -198,7 +198,12 @@ end
 -- Entirely inert if ElvUI isn't installed. Only skins the window chrome
 -- (backdrop/border, scrollbar, close button) - the rows stay plain text so
 -- the list stays compact, rather than getting ElvUI's usual per-button
--- backdrop treatment.
+-- backdrop treatment. There's no generic S:HandleFrame in ElvUI's Skins
+-- module (confirmed by reading its source: only HandleButton, HandleScrollBar,
+-- HandleCloseButton, etc. exist there) - the actual mechanism for a plain
+-- frame's border/background is :SetTemplate(), which ElvUI's core toolkit
+-- patches onto every frame's metatable once it loads (so it works on a
+-- frame from any addon, not just ElvUI's own).
 local function SkinPickerForElvUI(frame, scrollFrame, closeButton)
 	if not _G.ElvUI then return end
 	local ok, E = pcall(unpack, _G.ElvUI)
@@ -206,7 +211,12 @@ local function SkinPickerForElvUI(frame, scrollFrame, closeButton)
 	local S = E:GetModule("Skins")
 	if not S then return end
 
-	pcall(S.HandleFrame, S, frame, true)
+	if type(frame.StripTextures) == "function" then
+		pcall(frame.StripTextures, frame)
+	end
+	if type(frame.SetTemplate) == "function" then
+		pcall(frame.SetTemplate, frame, "Default")
+	end
 	if scrollFrame then
 		local scrollBar = _G[scrollFrame:GetName() .. "ScrollBar"]
 		if scrollBar then
