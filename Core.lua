@@ -256,6 +256,15 @@ local function ShowCollectionsJournalBypassingPanelManager()
 	end
 
 	CollectionsJournal:Show()
+
+	-- SetUIPanel is also what re-centers a "center" panel when no side
+	-- panel is docked next to it - skipping it means CollectionsJournal
+	-- keeps whatever position it last had (often shifted aside to make
+	-- room for a side panel), instead of the screen center players expect
+	-- when opening it this way. Force it back to center every time.
+	CollectionsJournal:ClearAllPoints()
+	CollectionsJournal:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
+
 	if type(CollectionsJournal_SetTab) == "function" then
 		local ok = pcall(CollectionsJournal_SetTab, CollectionsJournal, 1)
 		Debug("CollectionsJournal_SetTab(1) ok=%s", tostring(ok))
