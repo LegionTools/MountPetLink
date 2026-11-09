@@ -124,23 +124,28 @@ end
 -- player pick which one instead of guessing and opening the wrong one.
 -- ============================================================================
 
-local ROW_HEIGHT = 36
-local pickerFrame
+local ROW_HEIGHT = 18
+local FRAME_WIDTH = 240
+local MAX_VISIBLE_ROWS = 8 -- beyond this many candidates, the list scrolls
+
+-- Collected mounts are shown in normal (white) text, not-yet-collected ones
+-- dimmed - same white/grey convention Blizzard's own Mount Journal uses to
+-- show ownership (mounts have no quality/rarity of their own to color by).
+local COLLECTED_COLOR = { 1, 1, 1 }
+local UNCOLLECTED_COLOR = { 0.5, 0.5, 0.5 }
+
+local pickerFrame, pickerScrollChild
 local pickerRows = {}
 
 local function GetOrCreateRow(index)
 	if pickerRows[index] then return pickerRows[index] end
-	local row = CreateFrame("Button", nil, pickerFrame)
-	row:SetSize(230, ROW_HEIGHT - 4)
-	row:SetPoint("TOP", 0, -30 - (index - 1) * ROW_HEIGHT)
+	local row = CreateFrame("Button", nil, pickerScrollChild)
+	row:SetSize(FRAME_WIDTH - 16, ROW_HEIGHT)
+	row:SetPoint("TOP", 0, -(index - 1) * ROW_HEIGHT)
 	row:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
 
-	row.icon = row:CreateTexture(nil, "ARTWORK")
-	row.icon:SetSize(28, 28)
-	row.icon:SetPoint("LEFT", 2, 0)
-
-	row.text = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-	row.text:SetPoint("LEFT", row.icon, "RIGHT", 6, 0)
+	row.text = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+	row.text:SetPoint("LEFT", 2, 0)
 	row.text:SetPoint("RIGHT", -2, 0)
 	row.text:SetJustifyH("LEFT")
 
@@ -177,6 +182,14 @@ local function GetOrCreatePickerFrame()
 	frame.title:SetPoint("TOP", 0, -8)
 	frame.title:SetText("Несколько маунтов с такой иконкой:")
 
+	local scrollFrame = CreateFrame("ScrollFrame", "MountPetLinkPickerScrollFrame", frame, "UIPanelScrollFrameTemplate")
+	scrollFrame:SetPoint("TOPLEFT", 10, -28)
+	scrollFrame:SetPoint("BOTTOMRIGHT", -28, 8)
+
+	pickerScrollChild = CreateFrame("Frame", nil, scrollFrame)
+	pickerScrollChild:SetSize(FRAME_WIDTH - 16, ROW_HEIGHT)
+	scrollFrame:SetScrollChild(pickerScrollChild)
+
 	tinsert(UISpecialFrames, "MountPetLinkPickerFrame")
 	frame:Hide()
 	pickerFrame = frame
@@ -186,13 +199,17 @@ end
 local function ShowMountPicker(mountIDs)
 	GetOrCreatePickerFrame()
 	local numRows = #mountIDs
-	pickerFrame:SetSize(260, 40 + numRows * ROW_HEIGHT)
+	local visibleRows = math.min(numRows, MAX_VISIBLE_ROWS)
+
+	pickerFrame:SetSize(FRAME_WIDTH, 36 + visibleRows * ROW_HEIGHT)
+	pickerScrollChild:SetHeight(numRows * ROW_HEIGHT)
 
 	for i, mountID in ipairs(mountIDs) do
 		local row = GetOrCreateRow(i)
-		local ok, name, _, icon = pcall(C_MountJournal.GetMountInfoByID, mountID)
-		row.icon:SetTexture(ok and icon or nil)
+		local ok, name, _, _, _, _, _, _, _, _, isCollected = pcall(C_MountJournal.GetMountInfoByID, mountID)
 		row.text:SetText(ok and name or ("mountID " .. mountID))
+		local color = isCollected and COLLECTED_COLOR or UNCOLLECTED_COLOR
+		row.text:SetTextColor(color[1], color[2], color[3])
 		row:SetScript("OnClick", function()
 			pickerFrame:Hide()
 			OpenMountJournalFor(mountID)
