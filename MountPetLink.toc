@@ -1,7 +1,7 @@
 ## Interface: 70300
 ## Title: MountPetLink
 ## Notes: Ctrl+click a mount item (bags/bank/trade/mail) to jump straight to it in the Mount Journal, search box pre-filled.
-## Author: Colada
+## Author: Colada (Бообс-uwowx100)
 ## Version: 1.0.0
 ## OptionalDeps: ElvUI
 
