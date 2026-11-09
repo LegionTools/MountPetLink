@@ -28,47 +28,57 @@ if UIPanelWindows and UIPanelWindows["CollectionsJournal"] then
 	UIPanelWindows["CollectionsJournal"].allowOtherPanels = true
 end
 
--- allowOtherPanels alone isn't closing the trade window in practice. The
--- first round of diagnostics (hooking the global CloseTrade/HideUIPanel
--- functions) found neither was being called - so whatever hides TradeFrame
--- does it some other way (a direct :Hide() call, an animation, or a
--- TRADE_CLOSED event from the server itself). Hooking TradeFrame's own
--- OnHide script catches it regardless of mechanism; registering TRADE_CLOSED
--- separately tells us whether the server is the one ending the trade in the
--- first place, rather than the client UI closing it on its own.
---
--- All of this runs once at file-load time, long before the player could
--- ever type /mpldebug to turn DEBUG on - so failures here were being
--- swallowed by Debug() silently no-opping. Recorded into tradeHookStatus
--- instead and reported unconditionally by /mpldebug.
-local tradeHookStatus = {}
-do
-	tradeHookStatus.CloseTrade = pcall(hooksecurefunc, "CloseTrade", function()
-		Debug("CloseTrade() called:\n%s", debugstack(2))
-	end)
+-- allowOtherPanels alone isn't closing the vendor window in practice (the
+-- live test turned out to be a Ctrl+click on an item in the MERCHANT
+-- window, not a player trade - TradeFrame was a red herring from an earlier
+-- round of this same investigation). Something closes MerchantFrame some
+-- other way (a direct :Hide() call, an explicit CloseMerchant() call baked
+-- into Blizzard_Collections, or a MERCHANT_CLOSED event from the server).
+-- WatchPanelClose hooks all the ways a given panel could be closed and
+-- reports which one actually fires, with a stack trace, instead of
+-- guessing again. All of this runs once at file-load time, long before the
+-- player could ever type /mpldebug to turn DEBUG on, so failures are
+-- recorded into a status table and reported unconditionally by /mpldebug
+-- rather than through Debug() (which would silently no-op at that point).
+local function WatchPanelClose(frameGlobalName, closeFuncName, closeEventName)
+	local status = {}
 
-	tradeHookStatus.HideUIPanel = pcall(hooksecurefunc, "HideUIPanel", function(frame)
-		if frame and frame.GetName and frame:GetName() == "TradeFrame" then
-			Debug("HideUIPanel(TradeFrame) called:\n%s", debugstack(2))
+	if closeFuncName then
+		status[closeFuncName] = pcall(hooksecurefunc, closeFuncName, function()
+			Debug("%s() called:\n%s", closeFuncName, debugstack(2))
+		end)
+	end
+
+	status.HideUIPanel = pcall(hooksecurefunc, "HideUIPanel", function(frame)
+		if frame and frame.GetName and frame:GetName() == frameGlobalName then
+			Debug("HideUIPanel(%s) called:\n%s", frameGlobalName, debugstack(2))
 		end
 	end)
 
-	if TradeFrame then
-		tradeHookStatus.TradeFrameOnHide = pcall(TradeFrame.HookScript, TradeFrame, "OnHide", function()
-			Debug("TradeFrame OnHide fired:\n%s", debugstack(2))
+	local frame = _G[frameGlobalName]
+	if frame then
+		status.OnHide = pcall(frame.HookScript, frame, "OnHide", function()
+			Debug("%s OnHide fired:\n%s", frameGlobalName, debugstack(2))
 		end)
 	else
-		tradeHookStatus.TradeFrameOnHide = "TradeFrame is nil"
+		status.OnHide = frameGlobalName .. " is nil"
 	end
 
-	local tradeCloseWatcher = CreateFrame("Frame")
-	tradeHookStatus.TRADE_CLOSED = pcall(tradeCloseWatcher.RegisterEvent, tradeCloseWatcher, "TRADE_CLOSED")
-	if tradeHookStatus.TRADE_CLOSED then
-		tradeCloseWatcher:SetScript("OnEvent", function()
-			Debug("TRADE_CLOSED event fired (server ended the trade)")
-		end)
+	if closeEventName then
+		local watcher = CreateFrame("Frame")
+		status[closeEventName] = pcall(watcher.RegisterEvent, watcher, closeEventName)
+		if status[closeEventName] then
+			watcher:SetScript("OnEvent", function()
+				Debug("%s event fired (server ended it)", closeEventName)
+			end)
+		end
 	end
+
+	return status
 end
+
+local tradeHookStatus = WatchPanelClose("TradeFrame", "CloseTrade", "TRADE_CLOSED")
+local merchantHookStatus = WatchPanelClose("MerchantFrame", "CloseMerchant", "MERCHANT_CLOSED")
 
 -- This server's GetItemSpell doesn't return a usable spellID for
 -- mount-teaching items (confirmed via /mpltest - it comes back as "", not a
@@ -210,8 +220,8 @@ end
 
 local function OpenMountJournalFor(mountID)
 	ToggleCollectionsJournal(1)
-	Debug("TradeFrame IsShown=%s IsVisible=%s (checked right after opening the journal)",
-		tostring(TradeFrame and TradeFrame:IsShown()), tostring(TradeFrame and TradeFrame:IsVisible()))
+	Debug("TradeFrame IsShown=%s MerchantFrame IsShown=%s (checked right after opening the journal)",
+		tostring(TradeFrame and TradeFrame:IsShown()), tostring(MerchantFrame and MerchantFrame:IsShown()))
 	local ok, name = pcall(C_MountJournal.GetMountInfoByID, mountID)
 	if ok and name then
 		if type(C_MountJournal.SetSearch) == "function" then
@@ -225,8 +235,8 @@ end
 
 local function OpenPetJournalFor(speciesID)
 	ToggleCollectionsJournal(2)
-	Debug("TradeFrame IsShown=%s IsVisible=%s (checked right after opening the journal)",
-		tostring(TradeFrame and TradeFrame:IsShown()), tostring(TradeFrame and TradeFrame:IsVisible()))
+	Debug("TradeFrame IsShown=%s MerchantFrame IsShown=%s (checked right after opening the journal)",
+		tostring(TradeFrame and TradeFrame:IsShown()), tostring(MerchantFrame and MerchantFrame:IsShown()))
 	local ok, name = pcall(C_PetJournal.GetPetInfoBySpeciesID, speciesID)
 	if ok and name then
 		if type(C_PetJournal.SetSearchFilter) == "function" then
@@ -380,8 +390,8 @@ end
 
 hooksecurefunc("HandleModifiedItemClick", function(link)
 	Debug("HandleModifiedItemClick link=%s", tostring(link))
-	Debug("TradeFrame IsShown=%s IsVisible=%s (checked BEFORE this addon does anything else)",
-		tostring(TradeFrame and TradeFrame:IsShown()), tostring(TradeFrame and TradeFrame:IsVisible()))
+	Debug("TradeFrame IsShown=%s MerchantFrame IsShown=%s (checked BEFORE this addon does anything else)",
+		tostring(TradeFrame and TradeFrame:IsShown()), tostring(MerchantFrame and MerchantFrame:IsShown()))
 	if not IsModifiedClick("DRESSUP") then
 		Debug("not a Dressup-modified click, ignoring")
 		return
@@ -490,9 +500,12 @@ SlashCmdList["MOUNTPETLINKDEBUG"] = function()
 			tostring(MountJournalListScrollFrameButton1), tostring(PetJournalListScrollFrameButton1)))
 		print(string.format("UIPanelWindows[CollectionsJournal].allowOtherPanels=%s",
 			tostring(UIPanelWindows and UIPanelWindows["CollectionsJournal"] and UIPanelWindows["CollectionsJournal"].allowOtherPanels)))
-		print(string.format("trade-close hook status: CloseTrade=%s HideUIPanel=%s TradeFrameOnHide=%s TRADE_CLOSED=%s",
+		print(string.format("trade-close hook status: CloseTrade=%s HideUIPanel=%s OnHide=%s TRADE_CLOSED=%s",
 			tostring(tradeHookStatus.CloseTrade), tostring(tradeHookStatus.HideUIPanel),
-			tostring(tradeHookStatus.TradeFrameOnHide), tostring(tradeHookStatus.TRADE_CLOSED)))
+			tostring(tradeHookStatus.OnHide), tostring(tradeHookStatus.TRADE_CLOSED)))
+		print(string.format("merchant-close hook status: CloseMerchant=%s HideUIPanel=%s OnHide=%s MERCHANT_CLOSED=%s",
+			tostring(merchantHookStatus.CloseMerchant), tostring(merchantHookStatus.HideUIPanel),
+			tostring(merchantHookStatus.OnHide), tostring(merchantHookStatus.MERCHANT_CLOSED)))
 		print("C_MountJournal: " .. ListFunctions(C_MountJournal))
 		print("C_PetJournal: " .. ListFunctions(C_PetJournal))
 	end
