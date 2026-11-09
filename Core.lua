@@ -102,25 +102,37 @@ local function OpenPetJournalFor(speciesID)
 end
 
 hooksecurefunc("HandleModifiedItemClick", function(link)
-	if not IsModifiedClick("DRESSUP") then return end
+	Debug("HandleModifiedItemClick link=%s", tostring(link))
+	if not IsModifiedClick("DRESSUP") then
+		Debug("not a Dressup-modified click, ignoring")
+		return
+	end
 	local payload = GetLinkPayload(link)
-	if not payload then return end
+	if not payload then
+		Debug("could not extract a |H...|h payload from the link")
+		return
+	end
 	local linkType = payload:match("^(%a+):")
+	Debug("payload=%s linkType=%s", payload, tostring(linkType))
 
 	if linkType == "battlepet" then
 		local speciesID = tonumber(payload:match("^battlepet:(%d+)"))
+		Debug("speciesID=%s", tostring(speciesID))
 		if speciesID then
 			OpenPetJournalFor(speciesID)
 		end
 	elseif linkType == "item" then
 		local itemID = tonumber(payload:match("^item:(%d+)"))
+		Debug("itemID=%s", tostring(itemID))
 		if itemID then
 			local _, spellID = GetItemSpell(itemID)
+			Debug("GetItemSpell(%d) -> spellID=%s", itemID, tostring(spellID))
 			if spellID then
 				if not spellIDToMountID then
 					BuildMountSpellCache()
 				end
 				local mountID = spellIDToMountID[spellID]
+				Debug("spellIDToMountID[%d] -> mountID=%s", spellID, tostring(mountID))
 				if mountID then
 					OpenMountJournalFor(mountID)
 				end
