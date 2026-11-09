@@ -18,19 +18,28 @@ local function GetLinkPayload(link)
 	return link and link:match("|H(.-)|h")
 end
 
--- Setting allowOtherPanels=true on CollectionsJournal (the panel being
--- opened) didn't stop MerchantFrame from closing - a live stack trace
--- showed it's UIParent.lua's SetUIPanel doing the closing, not the older
--- area-conflict check that flag was meant for. So the flag's actual
--- meaning here looks inverted from what the name suggests: it has to be
--- set on the panel that should SURVIVE other panels opening, not on the
--- one being opened. Setting it on MerchantFrame/TradeFrame themselves
--- instead, as a test.
+-- Neither placement of the legacy UIPanelWindows[...].allowOtherPanels flag
+-- stopped MerchantFrame from closing - confirmed by a live stack trace
+-- showing SetUIPanel (UIParent.lua) as the actual closer, reached through a
+-- `SetAttribute` call. That's this client's modern secure-attribute panel
+-- system (frames opt in via UIPanelLayout-* attributes, not the old Lua
+-- table), so SetUIPanel almost certainly reads
+-- panel:GetAttribute("UIPanelLayout-allowOtherPanels") on the panel being
+-- closed, not anything in UIPanelWindows. Setting that attribute directly,
+-- as a test; kept the legacy table flags too since they're harmless either
+-- way and might matter for other, non-secure code paths.
 if UIPanelWindows then
 	for _, name in ipairs({ "CollectionsJournal", "MerchantFrame", "TradeFrame" }) do
 		if UIPanelWindows[name] then
 			UIPanelWindows[name].allowOtherPanels = true
 		end
+	end
+end
+
+for _, name in ipairs({ "MerchantFrame", "TradeFrame" }) do
+	local frame = _G[name]
+	if frame and frame.SetAttribute then
+		pcall(frame.SetAttribute, frame, "UIPanelLayout-allowOtherPanels", true)
 	end
 end
 
@@ -506,6 +515,14 @@ SlashCmdList["MOUNTPETLINKDEBUG"] = function()
 			tostring(MountJournalListScrollFrameButton1), tostring(PetJournalListScrollFrameButton1)))
 		print(string.format("UIPanelWindows[CollectionsJournal].allowOtherPanels=%s",
 			tostring(UIPanelWindows and UIPanelWindows["CollectionsJournal"] and UIPanelWindows["CollectionsJournal"].allowOtherPanels)))
+		local function GetAttrSafe(frame, attr)
+			if not frame then return "no frame" end
+			local ok, value = pcall(frame.GetAttribute, frame, attr)
+			return ok and tostring(value) or ("error: " .. tostring(value))
+		end
+		print(string.format("MerchantFrame attr UIPanelLayout-allowOtherPanels=%s TradeFrame attr=%s",
+			GetAttrSafe(MerchantFrame, "UIPanelLayout-allowOtherPanels"),
+			GetAttrSafe(TradeFrame, "UIPanelLayout-allowOtherPanels")))
 		print(string.format("trade-close hook status: CloseTrade=%s HideUIPanel=%s OnHide=%s TRADE_CLOSED=%s",
 			tostring(tradeHookStatus.CloseTrade), tostring(tradeHookStatus.HideUIPanel),
 			tostring(tradeHookStatus.OnHide), tostring(tradeHookStatus.TRADE_CLOSED)))
