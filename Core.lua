@@ -319,8 +319,43 @@ SlashCmdList["MOUNTPETLINKTEST"] = function(msg)
 		end
 	end
 
-	print(string.format("|cff33ccff[MountPetLink]|r itemID=%d name=%s icon=%s", itemID, tostring(name), tostring(icon)))
+	print(string.format("|cff33ccff[MountPetLink]|r itemID=%d name=%s icon=%s (%s)", itemID, tostring(name), tostring(icon), type(icon)))
 	print(string.format("  icon match: %d candidate(s): %s", candidates and #candidates or 0, table.concat(candidateNames, ", ")))
 	print(string.format("  spell match: GetItemSpell -> spellName=%s spellID=%s | spellIDToMountID[...] = %s",
 		tostring(spellName), tostring(spellID), tostring(spellID and spellIDToMountID[spellID])))
+end
+
+-- /mplfind <substring> - lists every mount whose name contains the given
+-- text (case-insensitive), with its mountID and icon (+ type). Lets us
+-- check a specific mount's real icon value directly against an item's,
+-- instead of inferring why an icon match missed it.
+SLASH_MOUNTPETLINKFIND1 = "/mplfind"
+SlashCmdList["MOUNTPETLINKFIND"] = function(msg)
+	if not msg or msg == "" then
+		print("|cff33ccff[MountPetLink]|r usage: /mplfind <substring>")
+		return
+	end
+	local needle = msg:lower()
+	local CMJ = C_MountJournal
+	local mountIDs
+
+	if type(CMJ.GetMountIDs) == "function" then
+		local ok, ids = pcall(CMJ.GetMountIDs)
+		if ok then mountIDs = ids end
+	end
+
+	local found = 0
+	if mountIDs then
+		for _, mountID in ipairs(mountIDs) do
+			local ok, name, spellID, icon = pcall(CMJ.GetMountInfoByID, mountID)
+			if ok and name and name:lower():find(needle, 1, true) then
+				found = found + 1
+				print(string.format("|cff33ccff[MountPetLink]|r mountID=%d name=%s icon=%s (%s) spellID=%s",
+					mountID, name, tostring(icon), type(icon), tostring(spellID)))
+			end
+		end
+	end
+	if found == 0 then
+		print("|cff33ccff[MountPetLink]|r no mount name matched, or GetMountIDs isn't available")
+	end
 end
