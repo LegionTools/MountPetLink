@@ -36,36 +36,37 @@ end
 -- OnHide script catches it regardless of mechanism; registering TRADE_CLOSED
 -- separately tells us whether the server is the one ending the trade in the
 -- first place, rather than the client UI closing it on its own.
+--
+-- All of this runs once at file-load time, long before the player could
+-- ever type /mpldebug to turn DEBUG on - so failures here were being
+-- swallowed by Debug() silently no-opping. Recorded into tradeHookStatus
+-- instead and reported unconditionally by /mpldebug.
+local tradeHookStatus = {}
 do
-	local ok1 = pcall(hooksecurefunc, "CloseTrade", function()
+	tradeHookStatus.CloseTrade = pcall(hooksecurefunc, "CloseTrade", function()
 		Debug("CloseTrade() called:\n%s", debugstack(2))
 	end)
-	if not ok1 then Debug("could not hook CloseTrade (doesn't exist on this client)") end
 
-	local ok2 = pcall(hooksecurefunc, "HideUIPanel", function(frame)
+	tradeHookStatus.HideUIPanel = pcall(hooksecurefunc, "HideUIPanel", function(frame)
 		if frame and frame.GetName and frame:GetName() == "TradeFrame" then
 			Debug("HideUIPanel(TradeFrame) called:\n%s", debugstack(2))
 		end
 	end)
-	if not ok2 then Debug("could not hook HideUIPanel") end
 
 	if TradeFrame then
-		local ok3 = pcall(TradeFrame.HookScript, TradeFrame, "OnHide", function()
+		tradeHookStatus.TradeFrameOnHide = pcall(TradeFrame.HookScript, TradeFrame, "OnHide", function()
 			Debug("TradeFrame OnHide fired:\n%s", debugstack(2))
 		end)
-		if not ok3 then Debug("could not hook TradeFrame OnHide") end
 	else
-		Debug("global TradeFrame doesn't exist at load time")
+		tradeHookStatus.TradeFrameOnHide = "TradeFrame is nil"
 	end
 
 	local tradeCloseWatcher = CreateFrame("Frame")
-	local registered = pcall(tradeCloseWatcher.RegisterEvent, tradeCloseWatcher, "TRADE_CLOSED")
-	if registered then
+	tradeHookStatus.TRADE_CLOSED = pcall(tradeCloseWatcher.RegisterEvent, tradeCloseWatcher, "TRADE_CLOSED")
+	if tradeHookStatus.TRADE_CLOSED then
 		tradeCloseWatcher:SetScript("OnEvent", function()
 			Debug("TRADE_CLOSED event fired (server ended the trade)")
 		end)
-	else
-		Debug("could not register TRADE_CLOSED")
 	end
 end
 
@@ -487,6 +488,9 @@ SlashCmdList["MOUNTPETLINKDEBUG"] = function()
 			tostring(MountJournalListScrollFrameButton1), tostring(PetJournalListScrollFrameButton1)))
 		print(string.format("UIPanelWindows[CollectionsJournal].allowOtherPanels=%s",
 			tostring(UIPanelWindows and UIPanelWindows["CollectionsJournal"] and UIPanelWindows["CollectionsJournal"].allowOtherPanels)))
+		print(string.format("trade-close hook status: CloseTrade=%s HideUIPanel=%s TradeFrameOnHide=%s TRADE_CLOSED=%s",
+			tostring(tradeHookStatus.CloseTrade), tostring(tradeHookStatus.HideUIPanel),
+			tostring(tradeHookStatus.TradeFrameOnHide), tostring(tradeHookStatus.TRADE_CLOSED)))
 		print("C_MountJournal: " .. ListFunctions(C_MountJournal))
 		print("C_PetJournal: " .. ListFunctions(C_PetJournal))
 	end
