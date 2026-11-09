@@ -3,5 +3,6 @@
 ## Notes: Ctrl+click a mount item or caged pet (bags/bank/trade/mail) to jump straight to it in the Mount/Pet Journal, search box pre-filled.
 ## Author: Colada
 ## Version: 1.0.0
+## OptionalDeps: ElvUI
 
 Core.lua

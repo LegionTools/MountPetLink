@@ -195,6 +195,29 @@ local function GetOrCreateRow(index)
 	return row
 end
 
+-- Entirely inert if ElvUI isn't installed. Only skins the window chrome
+-- (backdrop/border, scrollbar, close button) - the rows stay plain text so
+-- the list stays compact, rather than getting ElvUI's usual per-button
+-- backdrop treatment.
+local function SkinPickerForElvUI(frame, scrollFrame, closeButton)
+	if not _G.ElvUI then return end
+	local ok, E = pcall(unpack, _G.ElvUI)
+	if not ok or not E then return end
+	local S = E:GetModule("Skins")
+	if not S then return end
+
+	pcall(S.HandleFrame, S, frame, true)
+	if scrollFrame then
+		local scrollBar = _G[scrollFrame:GetName() .. "ScrollBar"]
+		if scrollBar then
+			pcall(S.HandleScrollBar, S, scrollBar)
+		end
+	end
+	if closeButton then
+		pcall(S.HandleCloseButton, S, closeButton)
+	end
+end
+
 local function GetOrCreatePickerFrame()
 	if pickerFrame then return pickerFrame end
 
@@ -208,8 +231,8 @@ local function GetOrCreatePickerFrame()
 			tile = true, tileSize = 32, edgeSize = 32,
 			insets = {left = 11, right = 12, top = 12, bottom = 11},
 		})
-		local close = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
-		close:SetPoint("TOPRIGHT", -2, -2)
+		frame.CloseButton = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
+		frame.CloseButton:SetPoint("TOPRIGHT", -2, -2)
 	end
 
 	frame:SetPoint("CENTER")
@@ -235,6 +258,8 @@ local function GetOrCreatePickerFrame()
 	tinsert(UISpecialFrames, "MountPetLinkPickerFrame")
 	frame:Hide()
 	pickerFrame = frame
+
+	SkinPickerForElvUI(frame, scrollFrame, frame.CloseButton)
 	return frame
 end
 
