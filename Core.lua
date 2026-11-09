@@ -209,6 +209,8 @@ end
 
 local function OpenMountJournalFor(mountID)
 	ToggleCollectionsJournal(1)
+	Debug("TradeFrame IsShown=%s IsVisible=%s (checked right after opening the journal)",
+		tostring(TradeFrame and TradeFrame:IsShown()), tostring(TradeFrame and TradeFrame:IsVisible()))
 	local ok, name = pcall(C_MountJournal.GetMountInfoByID, mountID)
 	if ok and name then
 		if type(C_MountJournal.SetSearch) == "function" then
@@ -222,6 +224,8 @@ end
 
 local function OpenPetJournalFor(speciesID)
 	ToggleCollectionsJournal(2)
+	Debug("TradeFrame IsShown=%s IsVisible=%s (checked right after opening the journal)",
+		tostring(TradeFrame and TradeFrame:IsShown()), tostring(TradeFrame and TradeFrame:IsVisible()))
 	local ok, name = pcall(C_PetJournal.GetPetInfoBySpeciesID, speciesID)
 	if ok and name then
 		if type(C_PetJournal.SetSearchFilter) == "function" then
