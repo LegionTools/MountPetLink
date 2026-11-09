@@ -18,6 +18,16 @@ local function GetLinkPayload(link)
 	return link and link:match("|H(.-)|h")
 end
 
+-- By default, opening the Collections Journal closes every other open UI
+-- panel (trade window included) because UIPanelWindows["CollectionsJournal"]
+-- has allowOtherPanels = false - that's Blizzard's own panel-management
+-- flag, not something specific to this addon's hook. Flip it once at load
+-- so a Ctrl+click mid-trade doesn't close the trade window out from under
+-- the player.
+if UIPanelWindows and UIPanelWindows["CollectionsJournal"] then
+	UIPanelWindows["CollectionsJournal"].allowOtherPanels = true
+end
+
 -- This server's GetItemSpell doesn't return a usable spellID for
 -- mount-teaching items (confirmed via /mpltest - it comes back as "", not a
 -- real number, even for a mount already in the collection), so matching by
@@ -136,6 +146,26 @@ local function TryMirrorSearchBoxText(frameName, text, attemptsLeft)
 	end
 end
 
+-- Clicks the first row of the journal's result list so its 3D model shows
+-- right away instead of leaving the player to click it themselves. This is
+-- the same "/click ...ScrollFrameButton1" trick players already use in
+-- macros for this - the button only reflects the current filtered results
+-- after SetSearch/SetSearchFilter has run and the list has had a moment to
+-- refresh, hence the retry.
+local function TryClickFirstResult(buttonName, attemptsLeft)
+	local button = _G[buttonName]
+	if button and button:IsVisible() then
+		button:Click()
+		Debug("clicked %s to preview the first result", buttonName)
+		return
+	end
+	if (attemptsLeft or 0) > 0 then
+		C_Timer.After(0.1, function() TryClickFirstResult(buttonName, attemptsLeft - 1) end)
+	else
+		Debug("could not find a visible %s to auto-preview (non-fatal)", buttonName)
+	end
+end
+
 local function OpenMountJournalFor(mountID)
 	ToggleCollectionsJournal(1)
 	local ok, name = pcall(C_MountJournal.GetMountInfoByID, mountID)
@@ -145,6 +175,7 @@ local function OpenMountJournalFor(mountID)
 			Debug("C_MountJournal.SetSearch(%q)", name)
 		end
 		TryMirrorSearchBoxText("MountJournalSearchBox", name, 5)
+		TryClickFirstResult("MountJournalListScrollFrameButton1", 5)
 	end
 end
 
@@ -157,6 +188,7 @@ local function OpenPetJournalFor(speciesID)
 			Debug("C_PetJournal.SetSearchFilter(%q)", name)
 		end
 		TryMirrorSearchBoxText("PetJournalSearchBox", name, 5)
+		TryClickFirstResult("PetJournalListScrollFrameButton1", 5)
 	end
 end
 
@@ -406,6 +438,10 @@ SlashCmdList["MOUNTPETLINKDEBUG"] = function()
 	if DEBUG then
 		print(string.format("CollectionsJournal=%s MountJournalSearchBox=%s PetJournalSearchBox=%s",
 			tostring(CollectionsJournal), tostring(MountJournalSearchBox), tostring(PetJournalSearchBox)))
+		print(string.format("MountJournalListScrollFrameButton1=%s PetJournalListScrollFrameButton1=%s",
+			tostring(MountJournalListScrollFrameButton1), tostring(PetJournalListScrollFrameButton1)))
+		print(string.format("UIPanelWindows[CollectionsJournal].allowOtherPanels=%s",
+			tostring(UIPanelWindows and UIPanelWindows["CollectionsJournal"] and UIPanelWindows["CollectionsJournal"].allowOtherPanels)))
 		print("C_MountJournal: " .. ListFunctions(C_MountJournal))
 		print("C_PetJournal: " .. ListFunctions(C_PetJournal))
 	end
