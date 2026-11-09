@@ -233,8 +233,43 @@ local function TryClickFirstResult(buttonName, attemptsLeft)
 	end
 end
 
+-- ToggleCollectionsJournal() routes through UIParent's secure panel manager
+-- (ShowUIPanel -> SetUIPanel), which force-hides any other "center" panel
+-- it considers conflicting - confirmed live, that's exactly what closes
+-- MerchantFrame (and would close TradeFrame too), and it happens even
+-- without this addon (standard Blizzard UI behavior, not a MountPetLink
+-- bug). Since MerchantFrame's own OnHide script calls CloseMerchant() -
+-- ending the server-side vendor interaction, not just a client animation -
+-- there's no "undo" after the fact; the only way to keep the vendor window
+-- open is to never let SetUIPanel hide it in the first place. So this
+-- shows CollectionsJournal directly (:Show() + manual tab switch),
+-- bypassing ToggleCollectionsJournal/ShowUIPanel/SetUIPanel entirely.
+-- Collections UI ships as its own on-demand addon (Blizzard_Collections),
+-- so it's force-loaded first if CollectionsJournal doesn't exist yet.
+local function ShowCollectionsJournalBypassingPanelManager(tabIndex)
+	if not CollectionsJournal then
+		local ok = pcall(UIParentLoadAddOn, "Blizzard_Collections")
+		Debug("UIParentLoadAddOn(Blizzard_Collections) ok=%s CollectionsJournal now=%s",
+			tostring(ok), tostring(CollectionsJournal))
+	end
+
+	if not CollectionsJournal then
+		Debug("CollectionsJournal still nil after load attempt - falling back to ToggleCollectionsJournal (will close the vendor/trade window)")
+		ToggleCollectionsJournal(tabIndex)
+		return
+	end
+
+	CollectionsJournal:Show()
+	if type(CollectionsJournal_SetTab) == "function" then
+		local ok = pcall(CollectionsJournal_SetTab, CollectionsJournal, tabIndex)
+		Debug("CollectionsJournal_SetTab(%d) ok=%s", tabIndex, tostring(ok))
+	else
+		Debug("CollectionsJournal_SetTab doesn't exist on this client - tab may not have switched")
+	end
+end
+
 local function OpenMountJournalFor(mountID)
-	ToggleCollectionsJournal(1)
+	ShowCollectionsJournalBypassingPanelManager(1)
 	Debug("TradeFrame IsShown=%s MerchantFrame IsShown=%s (checked right after opening the journal)",
 		tostring(TradeFrame and TradeFrame:IsShown()), tostring(MerchantFrame and MerchantFrame:IsShown()))
 	local ok, name = pcall(C_MountJournal.GetMountInfoByID, mountID)
@@ -249,7 +284,7 @@ local function OpenMountJournalFor(mountID)
 end
 
 local function OpenPetJournalFor(speciesID)
-	ToggleCollectionsJournal(2)
+	ShowCollectionsJournalBypassingPanelManager(2)
 	Debug("TradeFrame IsShown=%s MerchantFrame IsShown=%s (checked right after opening the journal)",
 		tostring(TradeFrame and TradeFrame:IsShown()), tostring(MerchantFrame and MerchantFrame:IsShown()))
 	local ok, name = pcall(C_PetJournal.GetPetInfoBySpeciesID, speciesID)
