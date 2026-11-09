@@ -19,17 +19,41 @@ local function GetLinkPayload(link)
 end
 
 -- This client has no direct "which mount teaches this spell" lookup, so the
--- mapping is built once (lazily) by scanning the whole Mount Journal.
+-- mapping is built once (lazily) by scanning the whole Mount Journal. Which
+-- enumeration function actually exists varies by client/emulator, so try a
+-- couple of known ones rather than assuming.
 local spellIDToMountID
 
 local function BuildMountSpellCache()
 	spellIDToMountID = {}
-	for i = 1, C_MountJournal.GetNumMounts() do
-		local _, spellID, _, _, _, _, _, _, _, _, _, mountID = C_MountJournal.GetMountInfo(i)
-		if spellID and mountID then
-			spellIDToMountID[spellID] = mountID
+	local CMJ = C_MountJournal
+
+	if type(CMJ.GetMountIDs) == "function" then
+		Debug("building mount cache via GetMountIDs")
+		local ok, mountIDs = pcall(CMJ.GetMountIDs)
+		if ok and mountIDs then
+			for _, mountID in ipairs(mountIDs) do
+				local _, spellID = CMJ.GetMountInfoByID(mountID)
+				if spellID then
+					spellIDToMountID[spellID] = mountID
+				end
+			end
+			return
 		end
 	end
+
+	if type(CMJ.GetMountInfo) == "function" and type(CMJ.GetNumMounts) == "function" then
+		Debug("building mount cache via GetNumMounts/GetMountInfo")
+		for i = 1, CMJ.GetNumMounts() do
+			local ok, _, spellID, _, _, _, _, _, _, _, _, _, mountID = pcall(CMJ.GetMountInfo, i)
+			if ok and spellID and mountID then
+				spellIDToMountID[spellID] = mountID
+			end
+		end
+		return
+	end
+
+	Debug("no known mount-enumeration API found on C_MountJournal - run /mpldebug to list what's there")
 end
 
 -- Setting an edit box's text via script doesn't fire its OnTextChanged, so
@@ -55,15 +79,15 @@ local function TrySetSearchBox(frameName, text, attemptsLeft)
 end
 
 local function OpenMountJournalFor(mountID)
-	local name = C_MountJournal.GetMountInfoByID(mountID)
+	local ok, name = pcall(C_MountJournal.GetMountInfoByID, mountID)
 	ToggleCollectionsJournal(1)
-	TrySetSearchBox("MountJournalSearchBox", name, 5)
+	TrySetSearchBox("MountJournalSearchBox", ok and name or "", 5)
 end
 
 local function OpenPetJournalFor(speciesID)
-	local name = C_PetJournal.GetPetInfoBySpeciesID(speciesID)
+	local ok, name = pcall(C_PetJournal.GetPetInfoBySpeciesID, speciesID)
 	ToggleCollectionsJournal(2)
-	TrySetSearchBox("PetJournalSearchBox", name, 5)
+	TrySetSearchBox("PetJournalSearchBox", ok and name or "", 5)
 end
 
 hooksecurefunc("HandleModifiedItemClick", function(link)
@@ -104,6 +128,19 @@ do
 	end
 end
 
+-- Lists every function this client's API table actually exposes, sorted -
+-- lets us check what's really there instead of guessing from retail docs.
+local function ListFunctions(tbl)
+	local names = {}
+	for key, value in pairs(tbl) do
+		if type(value) == "function" then
+			names[#names + 1] = key
+		end
+	end
+	table.sort(names)
+	return table.concat(names, ", ")
+end
+
 SLASH_MOUNTPETLINKDEBUG1 = "/mpldebug"
 SlashCmdList["MOUNTPETLINKDEBUG"] = function()
 	DEBUG = not DEBUG
@@ -111,5 +148,7 @@ SlashCmdList["MOUNTPETLINKDEBUG"] = function()
 	if DEBUG then
 		print(string.format("CollectionsJournal=%s MountJournalSearchBox=%s PetJournalSearchBox=%s",
 			tostring(CollectionsJournal), tostring(MountJournalSearchBox), tostring(PetJournalSearchBox)))
+		print("C_MountJournal: " .. ListFunctions(C_MountJournal))
+		print("C_PetJournal: " .. ListFunctions(C_PetJournal))
 	end
 end
