@@ -1,8 +1,8 @@
 -- MountPetLink: extends the normal dress-up gesture (Ctrl+click, or whatever
--- you've bound to the "Dressup" modified click) to mount-teaching items and
--- caged battle pets. Those items aren't equippable, so Blizzard's own
--- dress-up handler silently ignores them - this opens the matching
--- Collections Journal tab with the search box pre-filled instead.
+-- you've bound to the "Dressup" modified click) to mount-teaching items.
+-- Those items aren't equippable, so Blizzard's own dress-up handler
+-- silently ignores them - this opens the Mount Journal with the search box
+-- pre-filled instead.
 
 local DEBUG = false
 
@@ -12,22 +12,30 @@ local function Debug(fmt, ...)
 	end
 end
 
--- "|cffffffff|Hitem:12345:...|h[Name]|h|r" -> "item:12345:..." (or
--- "battlepet:speciesID:..." for a caged pet link).
+-- "|cffffffff|Hitem:12345:...|h[Name]|h|r" -> "item:12345:..."
 local function GetLinkPayload(link)
 	return link and link:match("|H(.-)|h")
 end
 
--- Neither placement of the legacy UIPanelWindows[...].allowOtherPanels flag
--- stopped MerchantFrame from closing - confirmed by a live stack trace
--- showing SetUIPanel (UIParent.lua) as the actual closer, reached through a
--- `SetAttribute` call. That's this client's modern secure-attribute panel
--- system (frames opt in via UIPanelLayout-* attributes, not the old Lua
--- table), so SetUIPanel almost certainly reads
--- panel:GetAttribute("UIPanelLayout-allowOtherPanels") on the panel being
--- closed, not anything in UIPanelWindows. Setting that attribute directly,
--- as a test; kept the legacy table flags too since they're harmless either
--- way and might matter for other, non-secure code paths.
+--[[ Investigation trail, kept for reference in case a future client/server
+update reopens this question (see MountPetLink's commit history for the
+full live-diagnosis session this came from):
+
+Neither placement of the legacy UIPanelWindows[...].allowOtherPanels flag
+stopped MerchantFrame from closing - a live stack trace showed SetUIPanel
+(UIParent.lua) as the actual closer, reached through a `SetAttribute` call
+(this client's modern secure-attribute panel system). Setting
+panel:SetAttribute("UIPanelLayout-allowOtherPanels", true) directly on
+MerchantFrame/TradeFrame didn't stop it either - confirmed by hooking every
+possible closing path (CloseTrade/CloseMerchant, HideUIPanel, each frame's
+own OnHide script, and the TRADE_CLOSED/MERCHANT_CLOSED events) and getting
+a full stack trace of SetUIPanel calling MerchantFrame:Hide() regardless of
+either flag. That turned out to be standard Blizzard UI behavior (any
+center-panel conflict with the vendor window closes it, even without this
+addon), not something fixable by flags - the actual fix is
+ShowCollectionsJournalBypassingPanelManager below, which avoids
+ShowUIPanel/SetUIPanel entirely instead of trying to make them behave.
+
 if UIPanelWindows then
 	for _, name in ipairs({ "CollectionsJournal", "MerchantFrame", "TradeFrame" }) do
 		if UIPanelWindows[name] then
@@ -43,18 +51,6 @@ for _, name in ipairs({ "MerchantFrame", "TradeFrame" }) do
 	end
 end
 
--- allowOtherPanels alone isn't closing the vendor window in practice (the
--- live test turned out to be a Ctrl+click on an item in the MERCHANT
--- window, not a player trade - TradeFrame was a red herring from an earlier
--- round of this same investigation). Something closes MerchantFrame some
--- other way (a direct :Hide() call, an explicit CloseMerchant() call baked
--- into Blizzard_Collections, or a MERCHANT_CLOSED event from the server).
--- WatchPanelClose hooks all the ways a given panel could be closed and
--- reports which one actually fires, with a stack trace, instead of
--- guessing again. All of this runs once at file-load time, long before the
--- player could ever type /mpldebug to turn DEBUG on, so failures are
--- recorded into a status table and reported unconditionally by /mpldebug
--- rather than through Debug() (which would silently no-op at that point).
 local function WatchPanelClose(frameGlobalName, closeFuncName, closeEventName)
 	local status = {}
 
@@ -94,6 +90,7 @@ end
 
 local tradeHookStatus = WatchPanelClose("TradeFrame", "CloseTrade", "TRADE_CLOSED")
 local merchantHookStatus = WatchPanelClose("MerchantFrame", "CloseMerchant", "MERCHANT_CLOSED")
+]]
 
 -- This server's GetItemSpell doesn't return a usable spellID for
 -- mount-teaching items (confirmed via /mpltest - it comes back as "", not a
@@ -193,12 +190,11 @@ local function BuildMountCaches()
 end
 
 -- Mirrors the search text into the journal's visible edit box (cosmetic
--- only - the actual filtering below goes through C_MountJournal.SetSearch /
--- C_PetJournal.SetSearchFilter directly). Right after the journal's
--- first-ever open the box may not exist yet for a tick (Blizzard_Collections
--- finishing its own setup), so retry briefly; if the frame name's wrong on
--- this client it just never updates, which isn't fatal since filtering
--- already happened.
+-- only - the actual filtering below goes through C_MountJournal.SetSearch
+-- directly). Right after the journal's first-ever open the box may not
+-- exist yet for a tick (Blizzard_Collections finishing its own setup), so
+-- retry briefly; if the frame name's wrong on this client it just never
+-- updates, which isn't fatal since filtering already happened.
 local function TryMirrorSearchBoxText(frameName, text, attemptsLeft)
 	local box = _G[frameName]
 	if box then
@@ -246,7 +242,7 @@ end
 -- bypassing ToggleCollectionsJournal/ShowUIPanel/SetUIPanel entirely.
 -- Collections UI ships as its own on-demand addon (Blizzard_Collections),
 -- so it's force-loaded first if CollectionsJournal doesn't exist yet.
-local function ShowCollectionsJournalBypassingPanelManager(tabIndex)
+local function ShowCollectionsJournalBypassingPanelManager()
 	if not CollectionsJournal then
 		local ok = pcall(UIParentLoadAddOn, "Blizzard_Collections")
 		Debug("UIParentLoadAddOn(Blizzard_Collections) ok=%s CollectionsJournal now=%s",
@@ -255,23 +251,21 @@ local function ShowCollectionsJournalBypassingPanelManager(tabIndex)
 
 	if not CollectionsJournal then
 		Debug("CollectionsJournal still nil after load attempt - falling back to ToggleCollectionsJournal (will close the vendor/trade window)")
-		ToggleCollectionsJournal(tabIndex)
+		ToggleCollectionsJournal(1)
 		return
 	end
 
 	CollectionsJournal:Show()
 	if type(CollectionsJournal_SetTab) == "function" then
-		local ok = pcall(CollectionsJournal_SetTab, CollectionsJournal, tabIndex)
-		Debug("CollectionsJournal_SetTab(%d) ok=%s", tabIndex, tostring(ok))
+		local ok = pcall(CollectionsJournal_SetTab, CollectionsJournal, 1)
+		Debug("CollectionsJournal_SetTab(1) ok=%s", tostring(ok))
 	else
 		Debug("CollectionsJournal_SetTab doesn't exist on this client - tab may not have switched")
 	end
 end
 
 local function OpenMountJournalFor(mountID)
-	ShowCollectionsJournalBypassingPanelManager(1)
-	Debug("TradeFrame IsShown=%s MerchantFrame IsShown=%s (checked right after opening the journal)",
-		tostring(TradeFrame and TradeFrame:IsShown()), tostring(MerchantFrame and MerchantFrame:IsShown()))
+	ShowCollectionsJournalBypassingPanelManager()
 	local ok, name = pcall(C_MountJournal.GetMountInfoByID, mountID)
 	if ok and name then
 		if type(C_MountJournal.SetSearch) == "function" then
@@ -280,21 +274,6 @@ local function OpenMountJournalFor(mountID)
 		end
 		TryMirrorSearchBoxText("MountJournalSearchBox", name, 5)
 		TryClickFirstResult("MountJournalListScrollFrameButton1", 5)
-	end
-end
-
-local function OpenPetJournalFor(speciesID)
-	ShowCollectionsJournalBypassingPanelManager(2)
-	Debug("TradeFrame IsShown=%s MerchantFrame IsShown=%s (checked right after opening the journal)",
-		tostring(TradeFrame and TradeFrame:IsShown()), tostring(MerchantFrame and MerchantFrame:IsShown()))
-	local ok, name = pcall(C_PetJournal.GetPetInfoBySpeciesID, speciesID)
-	if ok and name then
-		if type(C_PetJournal.SetSearchFilter) == "function" then
-			C_PetJournal.SetSearchFilter(name)
-			Debug("C_PetJournal.SetSearchFilter(%q)", name)
-		end
-		TryMirrorSearchBoxText("PetJournalSearchBox", name, 5)
-		TryClickFirstResult("PetJournalListScrollFrameButton1", 5)
 	end
 end
 
@@ -440,8 +419,6 @@ end
 
 hooksecurefunc("HandleModifiedItemClick", function(link)
 	Debug("HandleModifiedItemClick link=%s", tostring(link))
-	Debug("TradeFrame IsShown=%s MerchantFrame IsShown=%s (checked BEFORE this addon does anything else)",
-		tostring(TradeFrame and TradeFrame:IsShown()), tostring(MerchantFrame and MerchantFrame:IsShown()))
 	if not IsModifiedClick("DRESSUP") then
 		Debug("not a Dressup-modified click, ignoring")
 		return
@@ -454,13 +431,7 @@ hooksecurefunc("HandleModifiedItemClick", function(link)
 	local linkType = payload:match("^(%a+):")
 	Debug("payload=%s linkType=%s", payload, tostring(linkType))
 
-	if linkType == "battlepet" then
-		local speciesID = tonumber(payload:match("^battlepet:(%d+)"))
-		Debug("speciesID=%s", tostring(speciesID))
-		if speciesID then
-			OpenPetJournalFor(speciesID)
-		end
-	elseif linkType == "item" then
+	if linkType == "item" then
 		local itemID = tonumber(payload:match("^item:(%d+)"))
 		Debug("itemID=%s", tostring(itemID))
 		if itemID then
@@ -544,28 +515,11 @@ SlashCmdList["MOUNTPETLINKDEBUG"] = function()
 	DEBUG = not DEBUG
 	print("|cff33ccff[MountPetLink]|r debug " .. (DEBUG and "ON" or "OFF"))
 	if DEBUG then
-		print(string.format("CollectionsJournal=%s MountJournalSearchBox=%s PetJournalSearchBox=%s",
-			tostring(CollectionsJournal), tostring(MountJournalSearchBox), tostring(PetJournalSearchBox)))
-		print(string.format("MountJournalListScrollFrameButton1=%s PetJournalListScrollFrameButton1=%s",
-			tostring(MountJournalListScrollFrameButton1), tostring(PetJournalListScrollFrameButton1)))
-		print(string.format("UIPanelWindows[CollectionsJournal].allowOtherPanels=%s",
-			tostring(UIPanelWindows and UIPanelWindows["CollectionsJournal"] and UIPanelWindows["CollectionsJournal"].allowOtherPanels)))
-		local function GetAttrSafe(frame, attr)
-			if not frame then return "no frame" end
-			local ok, value = pcall(frame.GetAttribute, frame, attr)
-			return ok and tostring(value) or ("error: " .. tostring(value))
-		end
-		print(string.format("MerchantFrame attr UIPanelLayout-allowOtherPanels=%s TradeFrame attr=%s",
-			GetAttrSafe(MerchantFrame, "UIPanelLayout-allowOtherPanels"),
-			GetAttrSafe(TradeFrame, "UIPanelLayout-allowOtherPanels")))
-		print(string.format("trade-close hook status: CloseTrade=%s HideUIPanel=%s OnHide=%s TRADE_CLOSED=%s",
-			tostring(tradeHookStatus.CloseTrade), tostring(tradeHookStatus.HideUIPanel),
-			tostring(tradeHookStatus.OnHide), tostring(tradeHookStatus.TRADE_CLOSED)))
-		print(string.format("merchant-close hook status: CloseMerchant=%s HideUIPanel=%s OnHide=%s MERCHANT_CLOSED=%s",
-			tostring(merchantHookStatus.CloseMerchant), tostring(merchantHookStatus.HideUIPanel),
-			tostring(merchantHookStatus.OnHide), tostring(merchantHookStatus.MERCHANT_CLOSED)))
+		print(string.format("CollectionsJournal=%s MountJournalSearchBox=%s",
+			tostring(CollectionsJournal), tostring(MountJournalSearchBox)))
+		print(string.format("MountJournalListScrollFrameButton1=%s",
+			tostring(MountJournalListScrollFrameButton1)))
 		print("C_MountJournal: " .. ListFunctions(C_MountJournal))
-		print("C_PetJournal: " .. ListFunctions(C_PetJournal))
 	end
 end
 
