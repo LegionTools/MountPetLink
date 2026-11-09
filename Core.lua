@@ -294,6 +294,7 @@ hooksecurefunc("HandleModifiedItemClick", function(link)
 			end
 
 			local itemName, _, _, _, _, _, _, _, _, itemIcon = GetItemInfo(itemID)
+			local iconCandidates = itemIcon and iconToMountIDs[itemIcon]
 
 			local seen, candidates = {}, {}
 			local function AddCandidate(mountID)
@@ -303,26 +304,33 @@ hooksecurefunc("HandleModifiedItemClick", function(link)
 				end
 			end
 
-			if itemIcon and iconToMountIDs[itemIcon] then
-				for _, mountID in ipairs(iconToMountIDs[itemIcon]) do AddCandidate(mountID) end
-			end
+			if iconCandidates and #iconCandidates == 1 then
+				-- unambiguous icon match - trust it outright, skip the
+				-- wider (and noisier) spell/name-stem search entirely
+				Debug("itemIcon=%s -> exact single icon match, skipping widening", tostring(itemIcon))
+				AddCandidate(iconCandidates[1])
+			else
+				if iconCandidates then
+					for _, mountID in ipairs(iconCandidates) do AddCandidate(mountID) end
+				end
 
-			local _, spellID = GetItemSpell(itemID)
-			if spellID == "" then spellID = nil end -- this server returns "" rather than nil for no-spell items
-			spellID = tonumber(spellID)
-			if spellID then AddCandidate(spellIDToMountID[spellID]) end
+				local _, spellID = GetItemSpell(itemID)
+				if spellID == "" then spellID = nil end -- this server returns "" rather than nil for no-spell items
+				spellID = tonumber(spellID)
+				if spellID then AddCandidate(spellIDToMountID[spellID]) end
 
-			if itemName then
-				for stem in pairs(GetWordStems(itemName)) do
-					local matches = stemToMountIDs[stem]
-					if matches then
-						for _, mountID in ipairs(matches) do AddCandidate(mountID) end
+				if itemName then
+					for stem in pairs(GetWordStems(itemName)) do
+						local matches = stemToMountIDs[stem]
+						if matches then
+							for _, mountID in ipairs(matches) do AddCandidate(mountID) end
+						end
 					end
 				end
-			end
 
-			Debug("itemName=%s itemIcon=%s spellID=%s -> %d total candidate(s)",
-				tostring(itemName), tostring(itemIcon), tostring(spellID), #candidates)
+				Debug("itemName=%s itemIcon=%s spellID=%s -> %d total candidate(s) (widened)",
+					tostring(itemName), tostring(itemIcon), tostring(spellID), #candidates)
+			end
 
 			if #candidates == 1 then
 				OpenMountJournalFor(candidates[1])
