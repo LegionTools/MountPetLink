@@ -28,6 +28,24 @@ if UIPanelWindows and UIPanelWindows["CollectionsJournal"] then
 	UIPanelWindows["CollectionsJournal"].allowOtherPanels = true
 end
 
+-- allowOtherPanels alone isn't closing the trade window in practice, so
+-- something else is calling CloseTrade() or hiding TradeFrame directly.
+-- These hooks print exactly who does it (with a stack trace) the next time
+-- it happens, instead of guessing again - temporary, DEBUG-gated.
+do
+	local ok1 = pcall(hooksecurefunc, "CloseTrade", function()
+		Debug("CloseTrade() called:\n%s", debugstack(2))
+	end)
+	if not ok1 then Debug("could not hook CloseTrade (doesn't exist on this client)") end
+
+	local ok2 = pcall(hooksecurefunc, "HideUIPanel", function(frame)
+		if frame and frame.GetName and frame:GetName() == "TradeFrame" then
+			Debug("HideUIPanel(TradeFrame) called:\n%s", debugstack(2))
+		end
+	end)
+	if not ok2 then Debug("could not hook HideUIPanel") end
+end
+
 -- This server's GetItemSpell doesn't return a usable spellID for
 -- mount-teaching items (confirmed via /mpltest - it comes back as "", not a
 -- real number, even for a mount already in the collection), so matching by
