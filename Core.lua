@@ -18,42 +18,56 @@ local function GetLinkPayload(link)
 	return link and link:match("|H(.-)|h")
 end
 
--- This client has no direct "which mount teaches this spell" lookup, so the
--- mapping is built once (lazily) by scanning the whole Mount Journal. Which
--- enumeration function actually exists varies by client/emulator, so try a
--- couple of known ones rather than assuming.
-local spellIDToMountID
+-- This server's GetItemSpell doesn't return a usable spellID for
+-- mount-teaching items (confirmed via /mpltest - it comes back as "", not a
+-- real number, even for a mount already in the collection), so matching by
+-- spell isn't viable here. Instead, cache icon texture -> mountID: a mount
+-- item's icon is normally the same texture as the mount's own icon in the
+-- Journal, which is a language-independent match (unlike matching by name,
+-- which breaks on Russian noun declension between the item name and the
+-- mount's own name).
+local iconToMountID
+local spellIDToMountID -- kept as a fallback in case this ever works after all
 
-local function BuildMountSpellCache()
-	spellIDToMountID = {}
+local function BuildMountCaches()
+	iconToMountID, spellIDToMountID = {}, {}
 	local CMJ = C_MountJournal
+	local mountIDs
 
 	if type(CMJ.GetMountIDs) == "function" then
-		Debug("building mount cache via GetMountIDs")
-		local ok, mountIDs = pcall(CMJ.GetMountIDs)
-		if ok and mountIDs then
-			for _, mountID in ipairs(mountIDs) do
-				local _, spellID = CMJ.GetMountInfoByID(mountID)
-				if spellID then
-					spellIDToMountID[spellID] = mountID
+		local ok, ids = pcall(CMJ.GetMountIDs)
+		if ok then mountIDs = ids end
+	end
+
+	if mountIDs then
+		Debug("building mount caches via GetMountIDs (%d mounts)", #mountIDs)
+		for _, mountID in ipairs(mountIDs) do
+			local ok, _, spellID, icon = pcall(CMJ.GetMountInfoByID, mountID)
+			if ok then
+				if icon and not iconToMountID[icon] then
+					iconToMountID[icon] = mountID
+				end
+				if spellID and tonumber(spellID) and tonumber(spellID) ~= 0 then
+					spellIDToMountID[tonumber(spellID)] = mountID
 				end
 			end
-			return
 		end
-	end
-
-	if type(CMJ.GetMountInfo) == "function" and type(CMJ.GetNumMounts) == "function" then
-		Debug("building mount cache via GetNumMounts/GetMountInfo")
+	elseif type(CMJ.GetMountInfo) == "function" and type(CMJ.GetNumMounts) == "function" then
+		Debug("building mount caches via GetNumMounts/GetMountInfo")
 		for i = 1, CMJ.GetNumMounts() do
-			local ok, _, spellID, _, _, _, _, _, _, _, _, _, mountID = pcall(CMJ.GetMountInfo, i)
-			if ok and spellID and mountID then
-				spellIDToMountID[spellID] = mountID
+			local ok, _, spellID, icon, _, _, _, _, _, _, _, mountID = pcall(CMJ.GetMountInfo, i)
+			if ok then
+				if icon and mountID and not iconToMountID[icon] then
+					iconToMountID[icon] = mountID
+				end
+				if spellID and mountID and tonumber(spellID) and tonumber(spellID) ~= 0 then
+					spellIDToMountID[tonumber(spellID)] = mountID
+				end
 			end
 		end
-		return
+	else
+		Debug("no known mount-enumeration API found on C_MountJournal - run /mpldebug to list what's there")
 	end
-
-	Debug("no known mount-enumeration API found on C_MountJournal - run /mpldebug to list what's there")
 end
 
 -- Mirrors the search text into the journal's visible edit box (cosmetic
@@ -125,21 +139,26 @@ hooksecurefunc("HandleModifiedItemClick", function(link)
 		local itemID = tonumber(payload:match("^item:(%d+)"))
 		Debug("itemID=%s", tostring(itemID))
 		if itemID then
-			local _, spellID = GetItemSpell(itemID)
-			Debug("GetItemSpell(%d) -> spellID=%s (%s)", itemID, tostring(spellID), type(spellID))
-			-- this server's GetItemSpell returns "" (truthy!) rather than nil
-			-- for an item with no use-effect, not just nil
-			if spellID == "" then spellID = nil end
-			spellID = tonumber(spellID)
-			if spellID and spellID ~= 0 then
-				if not spellIDToMountID then
-					BuildMountSpellCache()
-				end
-				local mountID = spellIDToMountID[spellID]
-				Debug("spellIDToMountID[%d] -> mountID=%s", spellID, tostring(mountID))
-				if mountID then
-					OpenMountJournalFor(mountID)
-				end
+			if not iconToMountID then
+				BuildMountCaches()
+			end
+
+			local itemIcon = select(10, GetItemInfo(itemID))
+			Debug("itemIcon=%s -> mountID=%s", tostring(itemIcon), tostring(itemIcon and iconToMountID[itemIcon]))
+			local mountID = itemIcon and iconToMountID[itemIcon]
+
+			if not mountID then
+				-- fall back to the spell-based match in case the icon one
+				-- missed (e.g. a custom item icon that doesn't match its mount)
+				local _, spellID = GetItemSpell(itemID)
+				if spellID == "" then spellID = nil end -- this server returns "" rather than nil for no-spell items
+				spellID = tonumber(spellID)
+				Debug("fallback GetItemSpell -> spellID=%s -> mountID=%s", tostring(spellID), tostring(spellID and spellIDToMountID[spellID]))
+				mountID = spellID and spellIDToMountID[spellID]
+			end
+
+			if mountID then
+				OpenMountJournalFor(mountID)
 			end
 		end
 	end
@@ -151,7 +170,7 @@ do
 	local cacheRefresher = CreateFrame("Frame")
 	local registered = pcall(cacheRefresher.RegisterEvent, cacheRefresher, "NEW_MOUNT_ADDED")
 	if registered then
-		cacheRefresher:SetScript("OnEvent", function() spellIDToMountID = nil end)
+		cacheRefresher:SetScript("OnEvent", function() iconToMountID, spellIDToMountID = nil, nil end)
 	end
 end
 
@@ -180,10 +199,9 @@ SlashCmdList["MOUNTPETLINKDEBUG"] = function()
 	end
 end
 
--- /mpltest <itemID> - dumps GetItemSpell's raw return values for a known
--- itemID, to check directly whether an item actually has a use-effect
--- spell (and what this server really returns for one) instead of
--- inferring it from a click that might not even be on a mount item.
+-- /mpltest <itemID> - dumps everything both matching strategies (icon and
+-- spell) can see for a known itemID, instead of inferring it only from a
+-- click that might not even be on a mount item.
 SLASH_MOUNTPETLINKTEST1 = "/mpltest"
 SlashCmdList["MOUNTPETLINKTEST"] = function(msg)
 	local itemID = tonumber(msg)
@@ -191,15 +209,15 @@ SlashCmdList["MOUNTPETLINKTEST"] = function(msg)
 		print("|cff33ccff[MountPetLink]|r usage: /mpltest <itemID>")
 		return
 	end
-	local name = GetItemInfo(itemID)
-	local n = select("#", GetItemSpell(itemID))
+	if not iconToMountID then BuildMountCaches() end
+
+	local name, _, _, _, _, _, _, _, _, icon = GetItemInfo(itemID)
 	local spellName, spellID = GetItemSpell(itemID)
-	print(string.format("|cff33ccff[MountPetLink]|r itemID=%d name=%s | GetItemSpell returned %d value(s): spellName=%s (%s) spellID=%s (%s)",
-		itemID, tostring(name), n,
-		tostring(spellName), type(spellName),
-		tostring(spellID), type(spellID)))
-	if spellID and tonumber(spellID) and tonumber(spellID) ~= 0 then
-		if not spellIDToMountID then BuildMountSpellCache() end
-		print(string.format("  spellIDToMountID[%s] = %s", tostring(spellID), tostring(spellIDToMountID[tonumber(spellID)])))
-	end
+	if spellID == "" then spellID = nil end
+	spellID = tonumber(spellID)
+
+	print(string.format("|cff33ccff[MountPetLink]|r itemID=%d name=%s icon=%s", itemID, tostring(name), tostring(icon)))
+	print(string.format("  icon match: iconToMountID[%s] = %s", tostring(icon), tostring(icon and iconToMountID[icon])))
+	print(string.format("  spell match: GetItemSpell -> spellName=%s spellID=%s | spellIDToMountID[...] = %s",
+		tostring(spellName), tostring(spellID), tostring(spellID and spellIDToMountID[spellID])))
 end
